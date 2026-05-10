@@ -1,0 +1,21 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - copyloopvar
+    - gosec
+    - nilerr
+    - predeclared
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - tparallel
+    - unconvert
+    - unparam
+  exclusions:
+    presets:
+      - comments
+      - std-error-handling
+formatters:
+  enable:
+    - gofmt

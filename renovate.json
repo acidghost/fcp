@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    "customManagers:githubActionsVersions"
+  ],
+  "assigneesFromCodeOwners": true,
+  "automerge": true,
+  "labels": ["renovate", "lcm/{{updateType}}"],
+  "minimumReleaseAge": "7 days",
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch"],
+      "addLabels": ["lcm/approve"]
+    }
+  ]
+}
