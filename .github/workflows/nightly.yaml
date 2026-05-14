@@ -71,7 +71,7 @@ jobs:
       - name: Compress binaries
         run: |
           cd build
-          for binary in cfp-*; do
+          for binary in fcp-*; do
             tar -cvzf "${binary}.tar.gz" "$binary"
           done
 
