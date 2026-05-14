@@ -1,9 +1,8 @@
 name: Nightly
 
 on:
-  # Disable for the starter template
-  # schedule:
-  #   - cron: "37 6 * * *"
+  schedule:
+    - cron: "37 6 * * *"
   workflow_dispatch:
 
 permissions:
