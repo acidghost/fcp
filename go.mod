@@ -2,7 +2,7 @@ module github.com/acidghost/fcp
 
 go 1.25.8
 
-toolchain go1.26.3
+toolchain go1.26.4
 
 require (
 	charm.land/log/v2 v2.0.0
