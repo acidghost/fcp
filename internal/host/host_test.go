@@ -135,8 +135,7 @@ func TestHostReverseProxyPipeline(t *testing.T) {
 
 	controlPort := freePort(t)
 	dataPort := freePort(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	controlReady := make(chan net.Addr, 1)
 	dataReady := make(chan net.Addr, 1)
 	go func() {
@@ -267,8 +266,7 @@ func TestHostUnixSocketEarlyDataPipeline(t *testing.T) {
 
 	controlPort := freePort(t)
 	dataPort := freePort(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	controlReady := make(chan net.Addr, 1)
 	dataReady := make(chan net.Addr, 1)
 	go func() {
