@@ -16,9 +16,12 @@ import (
 
 func newStatusCmd() *cobra.Command {
 	var (
-		controlPort uint
-		hostFlag    string
-		jsonOut     bool
+		controlPort   uint
+		hostFlag      string
+		jsonOut       bool
+		authToken     string
+		authTokenFile string
+		noAuth        bool
 	)
 
 	cmd := &cobra.Command{
@@ -27,13 +30,21 @@ func newStatusCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			log.Debug("status command invoked", "controlPort", controlPort)
-			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(controlPort)}
+			cp, err := flagPort(controlPort)
+			if err != nil {
+				return err
+			}
+			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(cp)}
 			conn, err := control.DialTCP(addr, 3*time.Second)
 			if err != nil {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			if err := conn.Send(protocol.ListRequest{}); err != nil {
+			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			if err != nil {
+				return err
+			}
+			if err := conn.Send(protocol.ListRequest{AuthToken: token}); err != nil {
 				return err
 			}
 			msg, err := conn.Recv()
@@ -44,6 +55,12 @@ func newStatusCmd() *cobra.Command {
 			if !ok {
 				log.Error("unexpected response type from daemon", "type", fmt.Sprintf("%T", msg))
 				return fmt.Errorf("unexpected response %T", msg)
+			}
+			if !resp.Success {
+				if resp.Error != "" {
+					return fmt.Errorf("status rejected: %s", resp.Error)
+				}
+				return fmt.Errorf("status rejected")
 			}
 			log.Debug("status response received", "forwards", len(resp.Forwards), "socketForwards", len(resp.SocketForwards))
 			if jsonOut {
@@ -59,6 +76,9 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "json output")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
+	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
+	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
 	return cmd
 }

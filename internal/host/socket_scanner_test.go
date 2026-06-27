@@ -34,6 +34,24 @@ func TestSocketScannerDetectsAndRemovesSocket(t *testing.T) {
 	}
 }
 
+func TestIsSensitiveHostSocket(t *testing.T) {
+	sensitive := []string{
+		"/var/run/docker.sock",
+		"/run/docker.sock",
+		"/run/containerd/containerd.sock",
+		"/run/podman/podman.sock",
+		"/Users/me/.colima/default/docker.sock",
+	}
+	for _, path := range sensitive {
+		if !isSensitiveHostSocket(path) {
+			t.Fatalf("isSensitiveHostSocket(%q) = false, want true", path)
+		}
+	}
+	if isSensitiveHostSocket("/tmp/project/app.sock") {
+		t.Fatal("ordinary project socket classified as sensitive")
+	}
+}
+
 func ensureDir(path string) error {
 	return os.MkdirAll(path, 0o700)
 }

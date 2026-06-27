@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/container"
 	"github.com/acidghost/fcp/internal/log"
@@ -15,6 +14,7 @@ func newContainerDaemonCmd() *cobra.Command {
 		excludePorts  string
 		authToken     string
 		authTokenFile string
+		noAuth        bool
 		logFile       string
 	)
 
@@ -38,7 +38,10 @@ func newContainerDaemonCmd() *cobra.Command {
 				return err
 			}
 			cfg.ExcludePorts = ports
-			token := resolveContainerToken(authToken, authTokenFile)
+			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			if err != nil {
+				return err
+			}
 			log.Debug("container token resolved", "hasToken", token != "")
 			ctx, stop := signalContext()
 			defer stop()
@@ -56,18 +59,8 @@ func newContainerDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&excludePorts, "exclude-ports", "", "comma-separated exclude ports")
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
+	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "log file")
 
 	return cmd
-}
-
-func resolveContainerToken(cliToken, cliTokenFile string) string {
-	if token, err := auth.ResolveToken(cliToken, cliTokenFile, auth.DefaultContainerToken); err == nil {
-		return token
-	}
-	defaultPath, err := auth.TokenFilePath()
-	if err != nil {
-		return ""
-	}
-	return auth.ResolveCLIToken("", defaultPath)
 }

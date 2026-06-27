@@ -75,6 +75,9 @@ func (s *SocketScanner) Scan() ([]SocketInfo, []SocketInfo) {
 	}
 	for _, info := range found {
 		log.Debug("new socket discovered", "socketID", info.SocketID, "hostPath", info.HostPath, "containerPath", info.ContainerPath)
+		if isSensitiveHostSocket(info.HostPath) {
+			log.Warn("forwarding sensitive host socket grants high-impact host capabilities", "hostPath", info.HostPath, "containerPath", info.ContainerPath)
+		}
 	}
 	for _, info := range removed {
 		log.Debug("socket removed", "socketID", info.SocketID, "hostPath", info.HostPath)
@@ -192,4 +195,25 @@ func randomID() string {
 		return "sock-unknown"
 	}
 	return "sock-" + hex.EncodeToString(buf)
+}
+
+func isSensitiveHostSocket(path string) bool {
+	cleaned := filepath.Clean(path)
+	base := filepath.Base(cleaned)
+	if base == "docker.sock" {
+		return true
+	}
+	for _, marker := range []string{
+		"containerd.sock",
+		"containerd-shim",
+		"podman.sock",
+		"colima",
+		"lima",
+		"buildkit",
+	} {
+		if strings.Contains(cleaned, marker) {
+			return true
+		}
+	}
+	return false
 }

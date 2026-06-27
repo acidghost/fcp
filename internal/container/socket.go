@@ -61,7 +61,7 @@ func RemoveMirrorSocket(m *MirrorSocket) {
 	_ = os.Remove(filepath.Dir(m.ContainerPath))
 }
 
-func RunMirrorAcceptLoop(m *MirrorSocket, relay chan<- RelayMessage, dataAddr net.Addr) {
+func RunMirrorAcceptLoop(m *MirrorSocket, relay chan<- RelayMessage, dataAddr net.Addr, authToken string) {
 	log.Info("mirror socket accept loop started", "socketID", m.SocketID, "path", m.ContainerPath)
 	for {
 		conn, err := m.Listener.Accept()
@@ -73,11 +73,11 @@ func RunMirrorAcceptLoop(m *MirrorSocket, relay chan<- RelayMessage, dataAddr ne
 				return
 			}
 		}
-		go handleMirrorClient(m.SocketID, conn, relay, dataAddr)
+		go handleMirrorClient(m.SocketID, conn, relay, dataAddr, authToken)
 	}
 }
 
-func handleMirrorClient(socketID string, unixConn net.Conn, relay chan<- RelayMessage, dataAddr net.Addr) {
+func handleMirrorClient(socketID string, unixConn net.Conn, relay chan<- RelayMessage, dataAddr net.Addr, authToken string) {
 	defer unixConn.Close()
 	log.Debug("handling mirror client", "socketID", socketID)
 	connID := newConnID()
@@ -97,7 +97,11 @@ func handleMirrorClient(socketID string, unixConn net.Conn, relay chan<- RelayMe
 		return
 	}
 	defer dataConn.Close()
-	if err := control.WriteMessage(dataConn, protocol.ConnectReady{ConnID: connID}); err != nil {
+	ready, err := connectReady(connID, authToken)
+	if err != nil {
+		return
+	}
+	if err := control.WriteMessage(dataConn, ready); err != nil {
 		return
 	}
 	_ = copyBoth(unixConn, dataConn)

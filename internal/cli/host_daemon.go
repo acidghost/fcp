@@ -23,6 +23,7 @@ func newHostDaemonCmd() *cobra.Command {
 		authToken          string
 		authTokenFile      string
 		noAuth             bool
+		unsafeNoAuth       bool
 		socketWatchPaths   string
 		socketPrefix       string
 		socketScanMS       uint64
@@ -79,6 +80,7 @@ func newHostDaemonCmd() *cobra.Command {
 				BrowserCommand: browserCmd,
 				AuthToken:      resolvedToken,
 				NoAuth:         noAuth,
+				UnsafeNoAuth:   unsafeNoAuth,
 				SocketForwarding: config.SocketForwardingConfig{
 					Enabled:             !noSocketForwarding && socketWatchPaths != "",
 					WatchPaths:          splitComma(socketWatchPaths),
@@ -105,6 +107,7 @@ func newHostDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
+	cmd.Flags().BoolVar(&unsafeNoAuth, "unsafe-no-auth", false, "allow --no-auth on non-loopback bind addresses")
 	cmd.Flags().StringVar(&socketWatchPaths, "socket-watch-paths", "", "comma-separated socket globs")
 	cmd.Flags().StringVar(&socketPrefix, "socket-container-path-prefix", "", "socket container path prefix")
 	cmd.Flags().Uint64Var(&socketScanMS, "socket-scan-interval-ms", config.DefaultSocketScanMillis, "socket scan interval")

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/log"
@@ -62,7 +63,7 @@ func Run(ctx context.Context, cfg DaemonConfig, authToken string) error {
 		}
 		log.Info("registered with host daemon")
 		backoff = 100 * time.Millisecond
-		outcomeForwarded := runSession(ctx, conn, dataAddr, interval, exclude, filter, forwarded)
+		outcomeForwarded := runSession(ctx, conn, dataAddr, interval, exclude, filter, forwarded, authToken)
 		forwarded = outcomeForwarded
 		_ = conn.Close()
 		log.Warn("session ended, reconnecting", "backoff", backoff)
@@ -140,7 +141,7 @@ func register(conn *control.Connection, authToken string) error {
 	return nil
 }
 
-func runSession(ctx context.Context, conn *control.Connection, dataAddr net.Addr, scanInterval time.Duration, exclude map[uint16]struct{}, filter PortFilter, initial map[uint16]ListeningPort) map[uint16]ListeningPort {
+func runSession(ctx context.Context, conn *control.Connection, dataAddr net.Addr, scanInterval time.Duration, exclude map[uint16]struct{}, filter PortFilter, initial map[uint16]ListeningPort, authToken string) map[uint16]ListeningPort {
 	forwarded := make(map[uint16]ListeningPort, len(initial))
 	for port, lp := range initial {
 		forwarded[port] = lp
@@ -199,7 +200,7 @@ func runSession(ctx context.Context, conn *control.Connection, dataAddr net.Addr
 			log.Debug("received control message", "type", fmt.Sprintf("%T", msg))
 			switch m := msg.(type) {
 			case protocol.ConnectRequest:
-				go handleConnectRequest(m.Port, m.ConnID, dataAddr, relay)
+				go handleConnectRequest(m.Port, m.ConnID, dataAddr, relay, authToken)
 			case protocol.Ping:
 				_ = conn.Send(protocol.Pong{})
 			case protocol.ForwardAck:
@@ -210,7 +211,7 @@ func runSession(ctx context.Context, conn *control.Connection, dataAddr net.Addr
 				mirror, err := CreateMirrorSocket(m.SocketID, m.ContainerPath)
 				if err == nil {
 					mirrorSockets[m.SocketID] = mirror
-					go RunMirrorAcceptLoop(mirror, relay, dataAddr)
+					go RunMirrorAcceptLoop(mirror, relay, dataAddr, authToken)
 				} else {
 					log.Error("create mirror socket failed", "path", m.ContainerPath, "err", err)
 				}
@@ -233,7 +234,7 @@ func runSession(ctx context.Context, conn *control.Connection, dataAddr net.Addr
 	}
 }
 
-func handleConnectRequest(port uint16, connID string, dataAddr net.Addr, relay chan<- RelayMessage) {
+func handleConnectRequest(port uint16, connID string, dataAddr net.Addr, relay chan<- RelayMessage, authToken string) {
 	log.Debug("handling connect request", "port", port, "connID", connID)
 	localConn, err := dialLocalPort(port)
 	if err != nil {
@@ -249,7 +250,13 @@ func handleConnectRequest(port uint16, connID string, dataAddr net.Addr, relay c
 		return
 	}
 	defer dataConn.Close()
-	if err := control.WriteMessage(dataConn, protocol.ConnectReady{ConnID: connID}); err != nil {
+	ready, err := connectReady(connID, authToken)
+	if err != nil {
+		log.Warn("failed to create data handshake proof", "connID", connID, "err", err)
+		relayConnectFailed(relay, connID, err)
+		return
+	}
+	if err := control.WriteMessage(dataConn, ready); err != nil {
 		log.Warn("failed to send ConnectReady", "connID", connID, "err", err)
 		relayConnectFailed(relay, connID, err)
 		return
@@ -277,6 +284,17 @@ func relayConnectFailed(relay chan<- RelayMessage, connID string, err error) {
 	case relay <- RelayMessage{Msg: protocol.ConnectFailed{ConnID: connID, Error: err.Error()}}:
 	case <-time.After(time.Second):
 	}
+}
+
+func connectReady(connID, authToken string) (protocol.ConnectReady, error) {
+	if strings.TrimSpace(authToken) == "" {
+		return protocol.ConnectReady{ConnID: connID}, nil
+	}
+	proof, err := auth.DataHandshakeProof(authToken, connID)
+	if err != nil {
+		return protocol.ConnectReady{}, err
+	}
+	return protocol.ConnectReady{ConnID: connID, Proof: proof}, nil
 }
 
 func cleanupMirrors(mirrors map[string]*MirrorSocket) {

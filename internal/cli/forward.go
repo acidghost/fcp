@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/log"
@@ -23,6 +22,7 @@ func newForwardCmd() *cobra.Command {
 		hostFlag      string
 		authToken     string
 		authTokenFile string
+		noAuth        bool
 	)
 
 	cmd := &cobra.Command{
@@ -35,13 +35,21 @@ func newForwardCmd() *cobra.Command {
 				return err
 			}
 			log.Info("forward command invoked", "port", port, "controlPort", controlPort)
-			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(controlPort)}
+			cp, err := flagPort(controlPort)
+			if err != nil {
+				return err
+			}
+			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(cp)}
 			conn, err := control.DialTCP(addr, 3*time.Second)
 			if err != nil {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			if err := conn.Send(protocol.Register{ContainerID: "cli-manual", Hostname: "cli", AuthToken: auth.ResolveCLIToken(authToken, authTokenFile)}); err != nil {
+			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			if err != nil {
+				return err
+			}
+			if err := conn.Send(protocol.Register{ContainerID: "cli-manual", Hostname: "cli", AuthToken: token}); err != nil {
 				return err
 			}
 			msg, err := conn.Recv()
@@ -73,14 +81,18 @@ func newForwardCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
+	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
 	return cmd
 }
 
 func newUnforwardCmd() *cobra.Command {
 	var (
-		controlPort uint
-		hostFlag    string
+		controlPort   uint
+		hostFlag      string
+		authToken     string
+		authTokenFile string
+		noAuth        bool
 	)
 
 	cmd := &cobra.Command{
@@ -93,23 +105,49 @@ func newUnforwardCmd() *cobra.Command {
 				return err
 			}
 			log.Info("unforward command invoked", "port", port, "controlPort", controlPort)
-			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(controlPort)}
+			cp, err := flagPort(controlPort)
+			if err != nil {
+				return err
+			}
+			addr := net.TCPAddr{IP: config.ResolveCLIHost(hostFlag), Port: int(cp)}
 			conn, err := control.DialTCP(addr, 3*time.Second)
 			if err != nil {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			if err := conn.Send(protocol.Unforward{Port: port}); err != nil {
+			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			if err != nil {
 				return err
 			}
-			log.Info("unforward request sent", "port", port)
-			fmt.Printf("Unforward request sent for port %d\n", port)
+			if err := conn.Send(protocol.Unforward{Port: port, AuthToken: token}); err != nil {
+				return err
+			}
+			msg, err := conn.Recv()
+			if err != nil {
+				return err
+			}
+			ack, ok := msg.(protocol.UnforwardAck)
+			if !ok {
+				return fmt.Errorf("unexpected unforward response %T", msg)
+			}
+			if !ack.Success {
+				if ack.Error != "" {
+					return fmt.Errorf("unforward rejected: %s", ack.Error)
+				}
+				fmt.Printf("No active forward found for port %d.\n", port)
+				return nil
+			}
+			log.Info("unforwarded port", "port", port)
+			fmt.Printf("Unforwarded port %d.\n", port)
 			return nil
 		},
 	}
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
+	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
+	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
+	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
 	return cmd
 }

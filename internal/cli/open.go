@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/log"
@@ -19,6 +18,7 @@ func newOpenCmd() *cobra.Command {
 		controlPort   uint
 		authToken     string
 		authTokenFile string
+		noAuth        bool
 	)
 
 	cmd := &cobra.Command{
@@ -31,31 +31,35 @@ func newOpenCmd() *cobra.Command {
 				return err
 			}
 			log.Info("open command invoked", "url", args[0], "controlPort", cp)
-			return runOpen(args[0], cp, authToken, authTokenFile)
+			return runOpen(args[0], cp, noAuth, authToken, authTokenFile)
 		},
 	}
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
+	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
 	return cmd
 }
 
-func runOpen(rawURL string, controlPort uint16, authToken, authTokenFile string) error {
+func runOpen(rawURL string, controlPort uint16, noAuth bool, authToken, authTokenFile string) error {
 	log.Debug("runOpen", "url", rawURL, "controlPort", controlPort)
 	if err := protocol.ValidateOpenURL(rawURL); err != nil {
 		log.Warn("invalid open URL", "url", rawURL, "err", err)
 		return err
 	}
-	_ = auth.ResolveCLIToken(authToken, authTokenFile)
+	token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+	if err != nil {
+		return err
+	}
 	addr := net.TCPAddr{IP: config.ResolveCLIHost(""), Port: int(controlPort)}
 	conn, err := control.DialTCP(addr, 3*time.Second)
 	if err != nil {
 		return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 	}
 	defer conn.Close()
-	if err := conn.Send(protocol.OpenURL{URL: rawURL}); err != nil {
+	if err := conn.Send(protocol.OpenURL{URL: rawURL, AuthToken: token}); err != nil {
 		return err
 	}
 	msg, err := conn.Recv()
@@ -65,6 +69,9 @@ func runOpen(rawURL string, controlPort uint16, authToken, authTokenFile string)
 	ack, ok := msg.(protocol.OpenURLAck)
 	if !ok || !ack.Success {
 		log.Error("host daemon failed to open URL")
+		if ok && ack.Error != "" {
+			return fmt.Errorf("host daemon failed to open URL: %s", ack.Error)
+		}
 		return errors.New("host daemon failed to open URL")
 	}
 	log.Info("URL opened successfully")
