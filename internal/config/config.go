@@ -11,20 +11,33 @@ import (
 )
 
 const (
-	DefaultControlPort          uint16 = 19285
-	DefaultDataPort             uint16 = 19286
-	DefaultScanIntervalMillis   uint64 = 1000
-	DefaultSocketScanMillis     uint64 = 2000
-	DefaultMaxSocketForwards           = 16
-	DefaultConnectTimeoutMillis        = 10_000
+	DefaultControlPort            uint16 = 19285
+	DefaultDataPort               uint16 = 19286
+	DefaultScanIntervalMillis     uint64 = 1000
+	DefaultSocketScanMillis       uint64 = 2000
+	DefaultMaxSocketForwards             = 16
+	DefaultConnectTimeoutMillis          = 10_000
+	DefaultSocketScanBudgetMillis        = 250
 )
 
+type SocketForwardRule struct {
+	Name          string
+	HostPath      string
+	ContainerPath string
+	Sensitive     bool
+	AllowTokens   []string
+}
+
 type SocketForwardingConfig struct {
-	Enabled             bool
-	WatchPaths          []string
-	ContainerPathPrefix string
-	ScanIntervalMillis  uint64
-	MaxSocketForwards   int
+	Enabled                  bool
+	Rules                    []SocketForwardRule
+	WatchPaths               []string
+	ContainerPathPrefix      string
+	ScanIntervalMillis       uint64
+	ScanBudgetMillis         uint64
+	MaxSocketForwards        int
+	AllowSensitiveSockets    bool
+	AllowRecursiveSocketGlob bool
 }
 
 type Config struct {
@@ -45,6 +58,7 @@ func Default() Config {
 		ScanIntervalMillis: DefaultScanIntervalMillis,
 		SocketForwarding: SocketForwardingConfig{
 			ScanIntervalMillis: DefaultSocketScanMillis,
+			ScanBudgetMillis:   DefaultSocketScanBudgetMillis,
 			MaxSocketForwards:  DefaultMaxSocketForwards,
 		},
 	}

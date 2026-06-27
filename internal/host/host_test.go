@@ -4,12 +4,14 @@ import (
 	"context"
 	"io"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/acidghost/fcp/internal/auth"
+	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/protocol"
 )
@@ -200,6 +202,7 @@ func newTestDaemon(token string) *Daemon {
 		containers:    map[string]*containerState{},
 		usedHostPorts: map[uint16]string{},
 		pending:       map[string]chan dataStream{},
+		earlyData:     map[string]dataStream{},
 		sockets:       map[string]SocketInfo{},
 	}
 }
@@ -246,6 +249,97 @@ func dataHandshakeResolved(t *testing.T, d *Daemon, ready protocol.ConnectReady)
 		d.cancelPending(ready.ConnID)
 		<-done
 		return false
+	}
+}
+
+func TestHostUnixSocketEarlyDataPipeline(t *testing.T) {
+	tmp := t.TempDir()
+	socketPath := filepath.Join(tmp, "host.sock")
+	echoLn, err := net.Listen("unix", socketPath)
+	if err != nil {
+		if isListenSandboxError(err) {
+			t.Skipf("network sandbox does not permit unix sockets: %v", err)
+		}
+		t.Skipf("unix sockets unavailable in this sandbox: %v", err)
+	}
+	defer echoLn.Close()
+	go runEchoServer(echoLn)
+
+	controlPort := freePort(t)
+	dataPort := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controlReady := make(chan net.Addr, 1)
+	dataReady := make(chan net.Addr, 1)
+	go func() {
+		err := Run(ctx, Config{
+			ControlPort:  controlPort,
+			DataPort:     dataPort,
+			BindAddr:     net.ParseIP("127.0.0.1"),
+			NoAuth:       true,
+			ControlReady: controlReady,
+			DataReady:    dataReady,
+			SocketForwarding: config.SocketForwardingConfig{
+				Enabled:             true,
+				WatchPaths:          []string{socketPath},
+				ContainerPathPrefix: filepath.Join(tmp, "mirrors"),
+				ScanIntervalMillis:  10,
+				MaxSocketForwards:   4,
+			},
+		})
+		if err != nil {
+			t.Errorf("host Run: %v", err)
+		}
+	}()
+	<-controlReady
+	<-dataReady
+
+	ctrl, err := control.DialTCP(net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: int(controlPort)}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrl.Close()
+	if err := ctrl.Send(protocol.Register{ContainerID: "test-container", Hostname: "test", AuthToken: ""}); err != nil {
+		t.Fatal(err)
+	}
+	msg := recvControlMessage(t, ctrl, time.Second)
+	ack, ok := msg.(protocol.RegisterAck)
+	if !ok || !ack.Success {
+		t.Fatalf("register response = %#v", msg)
+	}
+	msg = recvControlMessage(t, ctrl, time.Second)
+	socketForward, ok := msg.(protocol.SocketForward)
+	if !ok {
+		t.Fatalf("socket forward = %#v", msg)
+	}
+	if socketForward.HostPath != socketPath {
+		t.Fatalf("host socket path = %q, want %q", socketForward.HostPath, socketPath)
+	}
+
+	data, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(dataPort))), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	connID := "conn-early"
+	if err := control.WriteMessage(data, protocol.ConnectReady{ConnID: connID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := data.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ctrl.Send(protocol.SocketConnectRequest{SocketID: socketForward.SocketID, ConnID: connID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(data, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "hello" {
+		t.Fatalf("echo = %q, want hello", string(buf))
 	}
 }
 
@@ -296,6 +390,29 @@ func runEchoServer(ln net.Listener) {
 			defer c.Close()
 			_, _ = io.Copy(c, c)
 		}(conn)
+	}
+}
+
+func recvControlMessage(t *testing.T, ctrl *control.Connection, timeout time.Duration) protocol.Message {
+	t.Helper()
+	type result struct {
+		msg protocol.Message
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		msg, err := ctrl.Recv()
+		ch <- result{msg: msg, err: err}
+	}()
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		return res.msg
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for control message")
+		return nil
 	}
 }
 
