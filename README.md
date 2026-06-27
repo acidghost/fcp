@@ -141,6 +141,16 @@ From inside the container:
 fcp open http://localhost:3000
 ```
 
+For transparent `xdg-open` / `open` support inside the container, install shims into a directory that appears before system directories in `PATH`:
+
+```bash
+fcp install-open-shims --dir ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+export BROWSER=fcp-open # optional, for tools that use $BROWSER directly
+```
+
+This installs `fcp-open`, `xdg-open`, `open`, and `sensible-browser` symlinks to the `fcp` binary. When invoked with an HTTP(S) URL, the shim sends an open request to the host daemon.
+
 Only `http://` and `https://` URLs are accepted. Open requests are rate-limited to 5 per second.
 
 ### Forward host Unix sockets into the container
@@ -214,6 +224,7 @@ Override this with `--bind-addr`, or force loopback behavior with `--no-docker-d
 | `fcp container-daemon` | Run the container-side scanner and traffic proxy. |
 | `fcp status [--json]` | List active TCP forwards and Unix socket mirrors. |
 | `fcp open URL` | Ask the host daemon to open an HTTP(S) URL. |
+| `fcp install-open-shims` | Install `fcp-open`, `xdg-open`, `open`, and `sensible-browser` shims. |
 | `fcp logs [-f]` | Show or follow the default daemon log file. |
 | `fcp restart` | Stop and then ensure the host daemon. |
 | `fcp stop` | Stop the host daemon. |

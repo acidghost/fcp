@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/log"
@@ -19,23 +20,36 @@ type BuildInfo struct {
 // Execute is the main entry point for the CLI.
 func Execute(build BuildInfo) int {
 	log.Debug("fcp CLI starting", "version", build.Version, "commit", build.Commit)
-	// Handle fcp-open binary symlink
-	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "fcp-open" {
-		if len(os.Args) < 2 {
-			fmt.Fprintln(os.Stderr, "usage: fcp-open <URL>")
-			return 1
-		}
-		cfg, err := config.FromEnv()
-		if err != nil {
-			log.Warn("failed to parse env config", "err", err)
-		}
-		if err := runOpen(os.Args[1], cfg.ControlPort, "", ""); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
+	if len(os.Args) > 0 && isOpenShimName(filepath.Base(os.Args[0])) {
+		return executeOpenShim(filepath.Base(os.Args[0]), os.Args[1:])
 	}
 
 	rootCmd := newRootCmd(build)
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	return 0
+}
+
+func isOpenShimName(name string) bool {
+	return slices.Contains(defaultOpenShimNames, name)
+}
+
+func executeOpenShim(name string, args []string) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		fmt.Fprintf(os.Stdout, "usage: %s <URL>\n", name)
+		return 0
+	}
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: %s <URL>\n", name)
+		return 1
+	}
+	cfg, err := config.FromEnv()
+	if err != nil {
+		log.Warn("failed to parse env config", "err", err)
+	}
+	if err := runOpen(args[0], cfg.ControlPort, "", ""); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -63,6 +77,7 @@ func newRootCmd(build BuildInfo) *cobra.Command {
 		newForwardCmd(),
 		newUnforwardCmd(),
 		newOpenCmd(),
+		newInstallOpenShimsCmd(),
 		newLogsCmd(),
 	)
 
