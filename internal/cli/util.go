@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/log"
 )
@@ -51,4 +52,11 @@ func splitComma(value string) []string {
 		}
 	}
 	return out
+}
+
+func resolveCommandToken(noAuth bool, authToken, authTokenFile string) (string, error) {
+	if noAuth {
+		return "", nil
+	}
+	return auth.ResolveClientToken(authToken, authTokenFile)
 }

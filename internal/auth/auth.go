@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -49,6 +52,45 @@ func ValidateTokenFormat(token string) bool {
 	return true
 }
 
+func NormalizeToken(token string) string {
+	return strings.ToLower(strings.TrimSpace(token))
+}
+
+func CompareTokens(expected, candidate string) bool {
+	expected = NormalizeToken(expected)
+	candidate = NormalizeToken(candidate)
+	if !ValidateTokenFormat(expected) || !ValidateTokenFormat(candidate) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(candidate)) == 1
+}
+
+func DataHandshakeProof(token, connID string) (string, error) {
+	token = NormalizeToken(token)
+	if !ValidateTokenFormat(token) {
+		return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
+	}
+	key, err := hex.DecodeString(token)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(connID))
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+func VerifyDataHandshakeProof(token, connID, proof string) bool {
+	expected, err := DataHandshakeProof(token, connID)
+	if err != nil {
+		return false
+	}
+	proof = NormalizeToken(proof)
+	if !ValidateTokenFormat(proof) {
+		return false
+	}
+	return hmac.Equal([]byte(expected), []byte(proof))
+}
+
 func GenerateToken() (string, error) {
 	buf := make([]byte, TokenByteLength)
 	if _, err := io.ReadFull(rand.Reader, buf); err != nil {
@@ -69,10 +111,11 @@ func ReadTokenFile(path string) (string, error) {
 	if !ValidateTokenFormat(token) {
 		return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
 	}
-	return token, nil
+	return NormalizeToken(token), nil
 }
 
 func WriteTokenFile(path, token string) error {
+	token = NormalizeToken(token)
 	if !ValidateTokenFormat(token) {
 		return fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
 	}
@@ -80,6 +123,9 @@ func WriteTokenFile(path, token string) error {
 		return err
 	}
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil { //nolint:gosec // 0600 is the intended restrictive token-file permission.
+		return err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
 		return err
 	}
 	return nil
@@ -108,7 +154,7 @@ func EnsureToken(path string) (string, error) {
 
 func ResolveToken(cliToken, cliTokenFile, defaultFile string) (string, error) {
 	if strings.TrimSpace(cliToken) != "" {
-		token := strings.TrimSpace(cliToken)
+		token := NormalizeToken(cliToken)
 		if !ValidateTokenFormat(token) {
 			log.Warn("invalid CLI token format", "length", len(token))
 			return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
@@ -120,7 +166,7 @@ func ResolveToken(cliToken, cliTokenFile, defaultFile string) (string, error) {
 		log.Debug("reading token from CLI token file", "path", cliTokenFile)
 		return ReadTokenFile(cliTokenFile)
 	}
-	if token := strings.TrimSpace(os.Getenv(EnvAuthToken)); token != "" {
+	if token := NormalizeToken(os.Getenv(EnvAuthToken)); token != "" {
 		if !ValidateTokenFormat(token) {
 			log.Warn("invalid env token format", "length", len(token))
 			return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
@@ -157,4 +203,27 @@ func ResolveCLIToken(cliToken, cliTokenFile string) string {
 		return ""
 	}
 	return token
+}
+
+func ResolveClientToken(cliToken, cliTokenFile string) (string, error) {
+	token, err := ResolveToken(cliToken, cliTokenFile, DefaultContainerToken)
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, ErrNoTokenSource) {
+		return "", err
+	}
+
+	defaultFile, pathErr := TokenFilePath()
+	if pathErr != nil {
+		return "", pathErr
+	}
+	token, err = ResolveToken(cliToken, cliTokenFile, defaultFile)
+	if err == nil {
+		return token, nil
+	}
+	if errors.Is(err, ErrNoTokenSource) {
+		return "", fmt.Errorf("%w: no fcp auth token found; set %s, mount %s, or copy %s into the container", ErrNoTokenSource, EnvAuthToken, DefaultContainerToken, defaultFile)
+	}
+	return "", err
 }

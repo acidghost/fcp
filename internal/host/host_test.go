@@ -9,9 +9,115 @@ import (
 	"testing"
 	"time"
 
+	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/protocol"
 )
+
+func TestAuthOK(t *testing.T) {
+	token := strings.Repeat("a", auth.TokenHexLength)
+	daemon := &Daemon{cfg: Config{AuthToken: token}}
+	if !daemon.authOK(strings.ToUpper(token)) {
+		t.Fatal("authOK rejected equivalent uppercase token")
+	}
+	if daemon.authOK(strings.Repeat("b", auth.TokenHexLength)) {
+		t.Fatal("authOK accepted wrong token")
+	}
+	if daemon.authOK("not-a-token") {
+		t.Fatal("authOK accepted malformed token")
+	}
+
+	noAuthDaemon := &Daemon{cfg: Config{NoAuth: true}}
+	if !noAuthDaemon.authOK("") {
+		t.Fatal("authOK rejected empty token in no-auth mode")
+	}
+}
+
+func TestTopLevelRequestsRequireAuth(t *testing.T) {
+	token := strings.Repeat("a", auth.TokenHexLength)
+	d := newTestDaemon(token)
+
+	msg := sendOneShot(t, d, protocol.ListRequest{})
+	listResp, ok := msg.(protocol.ListResponse)
+	if !ok || listResp.Success || listResp.Error != "unauthorized" {
+		t.Fatalf("unauthorized ListRequest response = %#v", msg)
+	}
+
+	msg = sendOneShot(t, d, protocol.ListRequest{AuthToken: token})
+	listResp, ok = msg.(protocol.ListResponse)
+	if !ok || !listResp.Success {
+		t.Fatalf("authorized ListRequest response = %#v", msg)
+	}
+
+	msg = sendOneShot(t, d, protocol.OpenURL{URL: "http://localhost:3000"})
+	openAck, ok := msg.(protocol.OpenURLAck)
+	if !ok || openAck.Success || openAck.Error != "unauthorized" {
+		t.Fatalf("unauthorized OpenURL response = %#v", msg)
+	}
+
+	msg = sendOneShot(t, d, protocol.Unforward{Port: 3000})
+	unforwardAck, ok := msg.(protocol.UnforwardAck)
+	if !ok || unforwardAck.Success || unforwardAck.Error != "unauthorized" {
+		t.Fatalf("unauthorized Unforward response = %#v", msg)
+	}
+
+	msg = sendOneShot(t, d, protocol.Unforward{Port: 3000, AuthToken: token})
+	unforwardAck, ok = msg.(protocol.UnforwardAck)
+	if !ok || unforwardAck.Success || unforwardAck.Error != "" {
+		t.Fatalf("authorized missing Unforward response = %#v", msg)
+	}
+
+	msg = sendOneShot(t, d, protocol.Shutdown{AuthToken: strings.Repeat("b", auth.TokenHexLength)})
+	shutdownAck, ok := msg.(protocol.ShutdownAck)
+	if !ok || shutdownAck.Success || shutdownAck.Error != "unauthorized" {
+		t.Fatalf("unauthorized Shutdown response = %#v", msg)
+	}
+}
+
+func TestShutdownAckSuccessClosesShutdown(t *testing.T) {
+	token := strings.Repeat("a", auth.TokenHexLength)
+	d := newTestDaemon(token)
+	msg := sendOneShot(t, d, protocol.Shutdown{AuthToken: token})
+	ack, ok := msg.(protocol.ShutdownAck)
+	if !ok || !ack.Success {
+		t.Fatalf("shutdown response = %#v", msg)
+	}
+	select {
+	case <-d.shutdown:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown channel was not closed")
+	}
+}
+
+func TestDataHandshakeRequiresProof(t *testing.T) {
+	token := strings.Repeat("a", auth.TokenHexLength)
+	d := newTestDaemon(token)
+	if dataHandshakeResolved(t, d, protocol.ConnectReady{ConnID: "conn-1", Proof: strings.Repeat("b", auth.TokenHexLength)}) {
+		t.Fatal("invalid data handshake proof resolved pending connection")
+	}
+	proof, err := auth.DataHandshakeProof(token, "conn-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dataHandshakeResolved(t, d, protocol.ConnectReady{ConnID: "conn-2", Proof: proof}) {
+		t.Fatal("valid data handshake proof did not resolve pending connection")
+	}
+}
+
+func TestDataHandshakeAllowsMissingProofInNoAuthMode(t *testing.T) {
+	d := newTestDaemon("")
+	d.cfg.NoAuth = true
+	if !dataHandshakeResolved(t, d, protocol.ConnectReady{ConnID: "conn-1"}) {
+		t.Fatal("no-auth data handshake without proof did not resolve pending connection")
+	}
+}
+
+func TestRunRejectsUnsafeNoAuthNonLoopbackBind(t *testing.T) {
+	err := Run(context.Background(), Config{ControlPort: 1, DataPort: 2, BindAddr: net.ParseIP("0.0.0.0"), NoAuth: true})
+	if err == nil || !strings.Contains(err.Error(), "refusing --no-auth") {
+		t.Fatalf("Run() err = %v, want unsafe no-auth refusal", err)
+	}
+}
 
 func TestHostReverseProxyPipeline(t *testing.T) {
 	echoLn, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -83,6 +189,63 @@ func TestHostReverseProxyPipeline(t *testing.T) {
 	}
 	if string(buf) != "hello" {
 		t.Fatalf("echo = %q, want hello", string(buf))
+	}
+}
+
+func newTestDaemon(token string) *Daemon {
+	return &Daemon{
+		cfg:           Config{AuthToken: token},
+		browser:       NewBrowserOpener(""),
+		shutdown:      make(chan struct{}),
+		containers:    map[string]*containerState{},
+		usedHostPorts: map[uint16]string{},
+		pending:       map[string]chan dataStream{},
+		sockets:       map[string]SocketInfo{},
+	}
+}
+
+func sendOneShot(t *testing.T, d *Daemon, msg protocol.Message) protocol.Message {
+	t.Helper()
+	client, server := net.Pipe()
+	defer client.Close()
+	go d.handleControl(control.NewConnection(server))
+	conn := control.NewConnection(client)
+	if err := conn.Send(msg); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := conn.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+func dataHandshakeResolved(t *testing.T, d *Daemon, ready protocol.ConnectReady) bool {
+	t.Helper()
+	ch, ok := d.registerPending(ready.ConnID)
+	if !ok {
+		t.Fatal("registerPending failed")
+	}
+	client, server := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		d.handleDataConnection(server)
+		close(done)
+	}()
+	if err := control.WriteMessage(client, ready); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ds := <-ch:
+		_ = ds.conn.Close()
+		_ = client.Close()
+		<-done
+		return true
+	case <-time.After(100 * time.Millisecond):
+		_ = client.Close()
+		d.cancelPending(ready.ConnID)
+		<-done
+		return false
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/acidghost/fcp/internal/auth"
 	"github.com/acidghost/fcp/internal/config"
 	"github.com/acidghost/fcp/internal/control"
 	"github.com/acidghost/fcp/internal/log"
@@ -43,6 +44,7 @@ type Config struct {
 	BrowserCommand   string
 	AuthToken        string
 	NoAuth           bool
+	UnsafeNoAuth     bool
 	SocketForwarding config.SocketForwardingConfig
 	ControlReady     chan<- net.Addr
 	DataReady        chan<- net.Addr
@@ -115,6 +117,12 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.DataPort = config.DefaultDataPort
 	}
 	bindAddr := ResolveBindAddr(cfg)
+	if !isLoopbackBind(bindAddr) {
+		log.Warn("host daemon listening on non-loopback address; use a trusted network or firewall the control/data ports", "bindAddr", bindAddr, "controlPort", cfg.ControlPort, "dataPort", cfg.DataPort)
+	}
+	if cfg.NoAuth && !cfg.UnsafeNoAuth && !isLoopbackBind(bindAddr) {
+		return fmt.Errorf("refusing --no-auth with non-loopback bind address %s; pass --unsafe-no-auth to acknowledge the risk", bindAddr)
+	}
 	log.Info("host daemon starting", "controlPort", cfg.ControlPort, "dataPort", cfg.DataPort, "bindAddr", bindAddr, "exitOnIdle", cfg.ExitOnIdle, "noAuth", cfg.NoAuth, "socketForwarding", cfg.SocketForwarding.Enabled)
 	controlLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: bindAddr, Port: int(cfg.ControlPort)})
 	if err != nil {
@@ -184,6 +192,10 @@ func ResolveBindAddr(cfg Config) net.IP {
 	return net.ParseIP("127.0.0.1")
 }
 
+func isLoopbackBind(ip net.IP) bool {
+	return ip != nil && ip.IsLoopback()
+}
+
 func detectDocker() bool {
 	//nolint:gosec // constant executable and no shell; used only as a best-effort Docker availability probe.
 	cmd := exec.Command("docker", "info")
@@ -244,24 +256,42 @@ func (d *Daemon) handleControl(conn *control.Connection) {
 		d.handleRegister(conn, m)
 	case protocol.ListRequest:
 		log.Debug("list request received")
+		if !d.authOK(m.AuthToken) {
+			log.Warn("list request with invalid auth token")
+			_ = conn.Send(protocol.ListResponse{Success: false, Error: "unauthorized"})
+			return
+		}
 		d.sendListResponse(conn)
 	case protocol.Ping:
 		log.Debug("ping received")
 		_ = conn.Send(protocol.Pong{})
 	case protocol.Unforward:
 		log.Info("global unforward request", "port", m.Port)
-		d.unforwardGlobal(m.Port)
+		if !d.authOK(m.AuthToken) {
+			log.Warn("global unforward request with invalid auth token", "port", m.Port)
+			_ = conn.Send(protocol.UnforwardAck{Port: m.Port, Success: false, Error: "unauthorized"})
+			return
+		}
+		removed := d.unforwardGlobal(m.Port)
+		_ = conn.Send(protocol.UnforwardAck{Port: m.Port, Success: removed})
 	case protocol.OpenURL:
 		log.Info("open URL request", "url", m.URL)
-		success := d.browser.Open(m.URL) == nil
-		_ = conn.Send(protocol.OpenURLAck{Success: success})
+		if !d.authOK(m.AuthToken) {
+			log.Warn("open URL request with invalid auth token")
+			_ = conn.Send(protocol.OpenURLAck{Success: false, Error: "unauthorized"})
+			return
+		}
+		err := d.browser.Open(m.URL)
+		_ = conn.Send(protocol.OpenURLAck{Success: err == nil, Error: errorString(err)})
 	case protocol.Shutdown:
 		log.Info("shutdown request received")
-		if d.authOK(m.AuthToken) {
-			d.requestShutdown()
-		} else {
+		if !d.authOK(m.AuthToken) {
 			log.Warn("shutdown request with invalid auth token")
+			_ = conn.Send(protocol.ShutdownAck{Success: false, Error: "unauthorized"})
+			return
 		}
+		_ = conn.Send(protocol.ShutdownAck{Success: true})
+		d.requestShutdown()
 	default:
 		log.Warn("unexpected first control message", "type", fmt.Sprintf("%T", first))
 	}
@@ -520,8 +550,13 @@ func (d *Daemon) handleDataConnection(conn net.Conn) {
 		return
 	}
 	ready, ok := msg.(protocol.ConnectReady)
-	if !ok || len(ready.ConnID) > 128 {
+	if !ok || ready.ConnID == "" || len(ready.ConnID) > 128 {
 		log.Warn("invalid data handshake", "type", fmt.Sprintf("%T", msg))
+		_ = conn.Close()
+		return
+	}
+	if !d.cfg.NoAuth && !auth.VerifyDataHandshakeProof(d.cfg.AuthToken, ready.ConnID, ready.Proof) {
+		log.Warn("data handshake with invalid auth proof", "connID", ready.ConnID)
 		_ = conn.Close()
 		return
 	}
@@ -590,7 +625,7 @@ func (d *Daemon) unforward(containerID string, port uint16) {
 	}
 }
 
-func (d *Daemon) unforwardGlobal(port uint16) {
+func (d *Daemon) unforwardGlobal(port uint16) bool {
 	d.stateMu.Lock()
 	var owner string
 	var fwd *forwardState
@@ -610,7 +645,9 @@ func (d *Daemon) unforwardGlobal(port uint16) {
 		d.browser.RemovePortMapping(port)
 		log.Info("unforwarded", "container", owner, "port", port)
 		closeForward(fwd)
+		return true
 	}
+	return false
 }
 
 func (d *Daemon) sendListResponse(conn *control.Connection) {
@@ -628,7 +665,7 @@ func (d *Daemon) sendListResponse(conn *control.Connection) {
 	}
 	d.stateMu.Unlock()
 	sort.Slice(forwards, func(i, j int) bool { return forwards[i].HostPort < forwards[j].HostPort })
-	_ = conn.Send(protocol.ListResponse{Forwards: forwards, SocketForwards: sockets})
+	_ = conn.Send(protocol.ListResponse{Success: true, Forwards: forwards, SocketForwards: sockets})
 }
 
 func (d *Daemon) handleSocketConnectRequest(state *containerState, req protocol.SocketConnectRequest) {
@@ -763,7 +800,14 @@ func (d *Daemon) cleanupAll() {
 }
 
 func (d *Daemon) authOK(token string) bool {
-	return d.cfg.NoAuth || (d.cfg.AuthToken != "" && token == d.cfg.AuthToken)
+	return d.cfg.NoAuth || auth.CompareTokens(d.cfg.AuthToken, token)
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (d *Daemon) requestShutdown() {

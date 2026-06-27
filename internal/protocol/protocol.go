@@ -18,6 +18,7 @@ const (
 	TypeForward              = "Forward"
 	TypeForwardAck           = "ForwardAck"
 	TypeUnforward            = "Unforward"
+	TypeUnforwardAck         = "UnforwardAck"
 	TypeConnectRequest       = "ConnectRequest"
 	TypeConnectReady         = "ConnectReady"
 	TypeConnectFailed        = "ConnectFailed"
@@ -31,6 +32,7 @@ const (
 	TypeSocketUnforward      = "SocketUnforward"
 	TypeSocketConnectRequest = "SocketConnectRequest"
 	TypeShutdown             = "Shutdown"
+	TypeShutdownAck          = "ShutdownAck"
 )
 
 type Protocol string
@@ -73,10 +75,19 @@ type ForwardAck struct {
 func (ForwardAck) messageType() string { return TypeForwardAck }
 
 type Unforward struct {
-	Port uint16
+	Port      uint16
+	AuthToken string
 }
 
 func (Unforward) messageType() string { return TypeUnforward }
+
+type UnforwardAck struct {
+	Port    uint16
+	Success bool
+	Error   string
+}
+
+func (UnforwardAck) messageType() string { return TypeUnforwardAck }
 
 type ConnectRequest struct {
 	Port   uint16
@@ -87,6 +98,7 @@ func (ConnectRequest) messageType() string { return TypeConnectRequest }
 
 type ConnectReady struct {
 	ConnID string
+	Proof  string
 }
 
 func (ConnectReady) messageType() string { return TypeConnectReady }
@@ -99,13 +111,15 @@ type ConnectFailed struct {
 func (ConnectFailed) messageType() string { return TypeConnectFailed }
 
 type OpenURL struct {
-	URL string
+	URL       string
+	AuthToken string
 }
 
 func (OpenURL) messageType() string { return TypeOpenURL }
 
 type OpenURLAck struct {
 	Success bool
+	Error   string
 }
 
 func (OpenURLAck) messageType() string { return TypeOpenURLAck }
@@ -118,7 +132,9 @@ type Pong struct{}
 
 func (Pong) messageType() string { return TypePong }
 
-type ListRequest struct{}
+type ListRequest struct {
+	AuthToken string
+}
 
 func (ListRequest) messageType() string { return TypeListRequest }
 
@@ -140,6 +156,8 @@ type SocketForwardInfo struct {
 }
 
 type ListResponse struct {
+	Success        bool                `json:"success"`
+	Error          string              `json:"error,omitempty"`
 	Forwards       []ForwardInfo       `json:"forwards"`
 	SocketForwards []SocketForwardInfo `json:"socket_forwards"`
 }
@@ -172,6 +190,13 @@ type Shutdown struct {
 }
 
 func (Shutdown) messageType() string { return TypeShutdown }
+
+type ShutdownAck struct {
+	Success bool
+	Error   string
+}
+
+func (ShutdownAck) messageType() string { return TypeShutdownAck }
 
 var ErrInvalidURL = errors.New("invalid URL")
 
@@ -233,11 +258,22 @@ func MarshalMessage(msg Message) ([]byte, error) {
 	case *ForwardAck:
 		return MarshalMessage(*m)
 	case Unforward:
+		//nolint:gosec // auth_token is part of the on-wire protocol, not a hardcoded secret.
 		return json.Marshal(struct {
-			Type string `json:"type"`
-			Port uint16 `json:"port"`
-		}{TypeUnforward, m.Port})
+			Type      string `json:"type"`
+			Port      uint16 `json:"port"`
+			AuthToken string `json:"auth_token,omitempty"`
+		}{TypeUnforward, m.Port, m.AuthToken})
 	case *Unforward:
+		return MarshalMessage(*m)
+	case UnforwardAck:
+		return json.Marshal(struct {
+			Type    string `json:"type"`
+			Port    uint16 `json:"port"`
+			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
+		}{TypeUnforwardAck, m.Port, m.Success, m.Error})
+	case *UnforwardAck:
 		return MarshalMessage(*m)
 	case ConnectRequest:
 		return json.Marshal(struct {
@@ -251,7 +287,8 @@ func MarshalMessage(msg Message) ([]byte, error) {
 		return json.Marshal(struct {
 			Type   string `json:"type"`
 			ConnID string `json:"conn_id"`
-		}{TypeConnectReady, m.ConnID})
+			Proof  string `json:"proof,omitempty"`
+		}{TypeConnectReady, m.ConnID, m.Proof})
 	case *ConnectReady:
 		return MarshalMessage(*m)
 	case ConnectFailed:
@@ -263,17 +300,20 @@ func MarshalMessage(msg Message) ([]byte, error) {
 	case *ConnectFailed:
 		return MarshalMessage(*m)
 	case OpenURL:
+		//nolint:gosec // auth_token is part of the on-wire protocol, not a hardcoded secret.
 		return json.Marshal(struct {
-			Type string `json:"type"`
-			URL  string `json:"url"`
-		}{TypeOpenURL, m.URL})
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			AuthToken string `json:"auth_token,omitempty"`
+		}{TypeOpenURL, m.URL, m.AuthToken})
 	case *OpenURL:
 		return MarshalMessage(*m)
 	case OpenURLAck:
 		return json.Marshal(struct {
 			Type    string `json:"type"`
 			Success bool   `json:"success"`
-		}{TypeOpenURLAck, m.Success})
+			Error   string `json:"error,omitempty"`
+		}{TypeOpenURLAck, m.Success, m.Error})
 	case *OpenURLAck:
 		return MarshalMessage(*m)
 	case Ping, *Ping:
@@ -284,16 +324,22 @@ func MarshalMessage(msg Message) ([]byte, error) {
 		return json.Marshal(struct {
 			Type string `json:"type"`
 		}{TypePong})
-	case ListRequest, *ListRequest:
+	case ListRequest:
+		//nolint:gosec // auth_token is part of the on-wire protocol, not a hardcoded secret.
 		return json.Marshal(struct {
-			Type string `json:"type"`
-		}{TypeListRequest})
+			Type      string `json:"type"`
+			AuthToken string `json:"auth_token,omitempty"`
+		}{TypeListRequest, m.AuthToken})
+	case *ListRequest:
+		return MarshalMessage(*m)
 	case ListResponse:
 		return json.Marshal(struct {
 			Type           string              `json:"type"`
+			Success        bool                `json:"success"`
+			Error          string              `json:"error,omitempty"`
 			Forwards       []ForwardInfo       `json:"forwards"`
 			SocketForwards []SocketForwardInfo `json:"socket_forwards"`
-		}{TypeListResponse, nonNilForwards(m.Forwards), nonNilSocketForwards(m.SocketForwards)})
+		}{TypeListResponse, m.Success, m.Error, nonNilForwards(m.Forwards), nonNilSocketForwards(m.SocketForwards)})
 	case *ListResponse:
 		return MarshalMessage(*m)
 	case SocketForward:
@@ -327,6 +373,14 @@ func MarshalMessage(msg Message) ([]byte, error) {
 			AuthToken string `json:"auth_token"`
 		}{TypeShutdown, m.AuthToken})
 	case *Shutdown:
+		return MarshalMessage(*m)
+	case ShutdownAck:
+		return json.Marshal(struct {
+			Type    string `json:"type"`
+			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
+		}{TypeShutdownAck, m.Success, m.Error})
+	case *ShutdownAck:
 		return MarshalMessage(*m)
 	default:
 		return nil, fmt.Errorf("unknown protocol message type %T", msg)
@@ -390,13 +444,25 @@ func UnmarshalMessage(data []byte) (Message, error) {
 		return ForwardAck{Port: wire.Port, Success: wire.Success, HostPort: wire.HostPort}, nil
 	case TypeUnforward:
 		var wire struct {
-			Type string `json:"type"`
-			Port uint16 `json:"port"`
+			Type      string `json:"type"`
+			Port      uint16 `json:"port"`
+			AuthToken string `json:"auth_token,omitempty"`
 		}
 		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return Unforward{Port: wire.Port}, nil
+		return Unforward{Port: wire.Port, AuthToken: wire.AuthToken}, nil
+	case TypeUnforwardAck:
+		var wire struct {
+			Type    string `json:"type"`
+			Port    uint16 `json:"port"`
+			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
+		}
+		if err := decodeStrict(data, &wire); err != nil {
+			return nil, err
+		}
+		return UnforwardAck{Port: wire.Port, Success: wire.Success, Error: wire.Error}, nil
 	case TypeConnectRequest:
 		var wire struct {
 			Type   string `json:"type"`
@@ -411,11 +477,12 @@ func UnmarshalMessage(data []byte) (Message, error) {
 		var wire struct {
 			Type   string `json:"type"`
 			ConnID string `json:"conn_id"`
+			Proof  string `json:"proof,omitempty"`
 		}
 		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return ConnectReady{ConnID: wire.ConnID}, nil
+		return ConnectReady{ConnID: wire.ConnID, Proof: wire.Proof}, nil
 	case TypeConnectFailed:
 		var wire struct {
 			Type   string `json:"type"`
@@ -428,22 +495,24 @@ func UnmarshalMessage(data []byte) (Message, error) {
 		return ConnectFailed{ConnID: wire.ConnID, Error: wire.Error}, nil
 	case TypeOpenURL:
 		var wire struct {
-			Type string `json:"type"`
-			URL  string `json:"url"`
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			AuthToken string `json:"auth_token,omitempty"`
 		}
 		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return OpenURL{URL: wire.URL}, nil
+		return OpenURL{URL: wire.URL, AuthToken: wire.AuthToken}, nil
 	case TypeOpenURLAck:
 		var wire struct {
 			Type    string `json:"type"`
 			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
 		}
 		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return OpenURLAck{Success: wire.Success}, nil
+		return OpenURLAck{Success: wire.Success, Error: wire.Error}, nil
 	case TypePing:
 		if err := decodeStrict(data, &struct {
 			Type string `json:"type"`
@@ -459,14 +528,18 @@ func UnmarshalMessage(data []byte) (Message, error) {
 		}
 		return Pong{}, nil
 	case TypeListRequest:
-		if err := decodeStrict(data, &struct {
-			Type string `json:"type"`
-		}{}); err != nil {
+		var wire struct {
+			Type      string `json:"type"`
+			AuthToken string `json:"auth_token,omitempty"`
+		}
+		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return ListRequest{}, nil
+		return ListRequest{AuthToken: wire.AuthToken}, nil
 	case TypeListResponse:
 		var wire struct {
+			Success        bool                `json:"success"`
+			Error          string              `json:"error,omitempty"`
 			Type           string              `json:"type"`
 			Forwards       []ForwardInfo       `json:"forwards"`
 			SocketForwards []SocketForwardInfo `json:"socket_forwards"`
@@ -474,7 +547,7 @@ func UnmarshalMessage(data []byte) (Message, error) {
 		if err := decodeStrict(data, &wire); err != nil {
 			return nil, err
 		}
-		return ListResponse{Forwards: nonNilForwards(wire.Forwards), SocketForwards: nonNilSocketForwards(wire.SocketForwards)}, nil
+		return ListResponse{Success: wire.Success, Error: wire.Error, Forwards: nonNilForwards(wire.Forwards), SocketForwards: nonNilSocketForwards(wire.SocketForwards)}, nil
 	case TypeSocketForward:
 		var wire struct {
 			Type          string `json:"type"`
@@ -514,6 +587,16 @@ func UnmarshalMessage(data []byte) (Message, error) {
 			return nil, err
 		}
 		return Shutdown{AuthToken: wire.AuthToken}, nil
+	case TypeShutdownAck:
+		var wire struct {
+			Type    string `json:"type"`
+			Success bool   `json:"success"`
+			Error   string `json:"error,omitempty"`
+		}
+		if err := decodeStrict(data, &wire); err != nil {
+			return nil, err
+		}
+		return ShutdownAck{Success: wire.Success, Error: wire.Error}, nil
 	default:
 		return nil, fmt.Errorf("unknown message type %q", header.Type)
 	}
