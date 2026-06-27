@@ -226,8 +226,7 @@ func glob(pattern string, deadline time.Time) ([]string, error) {
 }
 
 func globRoot(pattern string) string {
-	idx := strings.Index(pattern, "**")
-	prefix := pattern[:idx]
+	prefix, _, _ := strings.Cut(pattern, "**")
 	if meta := strings.IndexAny(prefix, "*?["); meta >= 0 {
 		prefix = prefix[:meta]
 	}

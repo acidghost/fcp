@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"maps"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -57,9 +58,7 @@ func (b *BrowserOpener) Open(rawURL string) error {
 	}
 	b.recentOpens = append(b.recentOpens, now)
 	portMap := make(map[uint16]uint16, len(b.portMap))
-	for k, v := range b.portMap {
-		portMap[k] = v
-	}
+	maps.Copy(portMap, b.portMap)
 	command := b.command
 	b.mu.Unlock()
 

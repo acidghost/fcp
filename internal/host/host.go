@@ -31,8 +31,6 @@ const (
 	connectTimeout          = 10 * time.Second
 	dataHandshakeTimeout    = 10 * time.Second
 	firstMessageTimeout     = 30 * time.Second
-	heartbeatInterval       = 30 * time.Second
-	maxMissedPongs          = 3
 )
 
 type Config struct {
@@ -471,11 +469,7 @@ func (d *Daemon) forward(containerID string, state *containerState, msg protocol
 }
 
 func nextPort(port uint16) uint16 {
-	next := port + 1
-	if next < 1024 {
-		next = 1024
-	}
-	return next
+	return max(port+1, 1024)
 }
 
 func bindLoopback(port uint16) (net.Listener, error) {

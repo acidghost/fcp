@@ -150,7 +150,7 @@ func writePIDFile(pid int) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(fmt.Sprint(pid)), 0o600) //nolint:gosec // pid file is intentionally owner-only.
+	return os.WriteFile(path, fmt.Append(nil, pid), 0o600) //nolint:gosec // pid file is intentionally owner-only.
 }
 
 func removePIDFile() error {
