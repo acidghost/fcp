@@ -19,7 +19,6 @@ func newStatusCmd() *cobra.Command {
 		controlPort   uint
 		hostFlag      string
 		jsonOut       bool
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 	)
@@ -40,7 +39,7 @@ func newStatusCmd() *cobra.Command {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			token, err := resolveCommandToken(noAuth, authTokenFile)
 			if err != nil {
 				return err
 			}
@@ -76,7 +75,6 @@ func newStatusCmd() *cobra.Command {
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "json output")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 

@@ -19,7 +19,6 @@ import (
 const (
 	TokenHexLength        = 64
 	TokenByteLength       = 32
-	EnvAuthToken          = "FCP_AUTH_TOKEN"              //nolint:gosec // Environment variable name, not a credential value.
 	EnvAuthTokenFile      = "FCP_AUTH_TOKEN_FILE"         //nolint:gosec // Environment variable name, not a credential value.
 	DefaultContainerToken = "/run/secrets/fcp-auth-token" //nolint:gosec // Default token file path, not a credential value.
 	configDirName         = "fcp"
@@ -152,27 +151,10 @@ func EnsureToken(path string) (string, error) {
 	return token, nil
 }
 
-func ResolveToken(cliToken, cliTokenFile, defaultFile string) (string, error) {
-	if strings.TrimSpace(cliToken) != "" {
-		token := NormalizeToken(cliToken)
-		if !ValidateTokenFormat(token) {
-			log.Warn("invalid CLI token format", "length", len(token))
-			return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
-		}
-		log.Debug("token resolved from CLI flag")
-		return token, nil
-	}
+func ResolveToken(cliTokenFile, defaultFile string) (string, error) {
 	if strings.TrimSpace(cliTokenFile) != "" {
 		log.Debug("reading token from CLI token file", "path", cliTokenFile)
 		return ReadTokenFile(cliTokenFile)
-	}
-	if token := NormalizeToken(os.Getenv(EnvAuthToken)); token != "" {
-		if !ValidateTokenFormat(token) {
-			log.Warn("invalid env token format", "length", len(token))
-			return "", fmt.Errorf("%w: expected %d hex characters, got %d", ErrInvalidToken, TokenHexLength, len(token))
-		}
-		log.Debug("token resolved from env", "env", EnvAuthToken)
-		return token, nil
 	}
 	if path := strings.TrimSpace(os.Getenv(EnvAuthTokenFile)); path != "" {
 		log.Debug("reading token from env token file", "path", path)
@@ -193,20 +175,20 @@ func ResolveToken(cliToken, cliTokenFile, defaultFile string) (string, error) {
 	return "", fmt.Errorf("%w: checked %s", ErrNoTokenSource, defaultFile)
 }
 
-func ResolveCLIToken(cliToken, cliTokenFile string) string {
+func ResolveCLIToken(cliTokenFile string) string {
 	defaultFile, err := TokenFilePath()
 	if err != nil {
 		return ""
 	}
-	token, err := ResolveToken(cliToken, cliTokenFile, defaultFile)
+	token, err := ResolveToken(cliTokenFile, defaultFile)
 	if err != nil {
 		return ""
 	}
 	return token
 }
 
-func ResolveClientToken(cliToken, cliTokenFile string) (string, error) {
-	token, err := ResolveToken(cliToken, cliTokenFile, DefaultContainerToken)
+func ResolveClientToken(cliTokenFile string) (string, error) {
+	token, err := ResolveToken(cliTokenFile, DefaultContainerToken)
 	if err == nil {
 		return token, nil
 	}
@@ -218,12 +200,12 @@ func ResolveClientToken(cliToken, cliTokenFile string) (string, error) {
 	if pathErr != nil {
 		return "", pathErr
 	}
-	token, err = ResolveToken(cliToken, cliTokenFile, defaultFile)
+	token, err = ResolveToken(cliTokenFile, defaultFile)
 	if err == nil {
 		return token, nil
 	}
 	if errors.Is(err, ErrNoTokenSource) {
-		return "", fmt.Errorf("%w: no fcp auth token found; set %s, mount %s, or copy %s into the container", ErrNoTokenSource, EnvAuthToken, DefaultContainerToken, defaultFile)
+		return "", fmt.Errorf("%w: no fcp auth token found; set %s, mount %s, or copy %s into the container", ErrNoTokenSource, EnvAuthTokenFile, DefaultContainerToken, defaultFile)
 	}
 	return "", err
 }

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/acidghost/fcp/internal/auth"
@@ -16,7 +17,7 @@ import (
 	"github.com/acidghost/fcp/internal/protocol"
 )
 
-func Ensure(ctx context.Context, hostIP net.IP, controlPort, dataPort uint16, noAuth, unsafeNoAuth bool, authToken, authTokenFile string) error {
+func Ensure(ctx context.Context, hostIP net.IP, controlPort, dataPort uint16, noAuth, unsafeNoAuth bool, authTokenFile string) error {
 	addr := net.TCPAddr{IP: hostIP, Port: int(controlPort)}
 	log.Info("ensuring host daemon", "addr", addr.String(), "controlPort", controlPort, "dataPort", dataPort)
 	if ping(addr) {
@@ -25,58 +26,32 @@ func Ensure(ctx context.Context, hostIP net.IP, controlPort, dataPort uint16, no
 	}
 
 	spawnTokenFile := ""
-	inheritedEnvToken := false
-	if !noAuth && authToken == "" && authTokenFile == "" {
-		if _, err := auth.ResolveToken("", "", ""); err == nil {
-			inheritedEnvToken = true
-		} else if !errors.Is(err, auth.ErrNoTokenSource) {
-			return err
+	if !noAuth {
+		if authTokenFile != "" {
+			spawnTokenFile = authTokenFile
+		} else if envTokenFile := strings.TrimSpace(os.Getenv(auth.EnvAuthTokenFile)); envTokenFile != "" {
+			spawnTokenFile = envTokenFile
+		} else {
+			path, err := auth.TokenFilePath()
+			if err != nil {
+				return err
+			}
+			if _, err := auth.EnsureToken(path); err != nil {
+				return err
+			}
+			spawnTokenFile = path
 		}
-	}
-	if !noAuth && authToken == "" && authTokenFile == "" && !inheritedEnvToken {
-		path, err := auth.TokenFilePath()
-		if err != nil {
-			return err
-		}
-		_, err = auth.EnsureToken(path)
-		if err != nil {
-			return err
-		}
-		spawnTokenFile = path
 	}
 
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	args := []string{"host-daemon", "--control-port", fmt.Sprint(controlPort), "--data-port", fmt.Sprint(dataPort)}
-	var env []string
-	if noAuth {
-		args = append(args, "--no-auth")
-		if unsafeNoAuth {
-			args = append(args, "--unsafe-no-auth")
-		}
-	} else if authToken != "" {
-		env = append(os.Environ(), auth.EnvAuthToken+"="+authToken)
-	} else if spawnTokenFile != "" {
-		args = append(args, "--auth-token-file", spawnTokenFile)
-	} else if authTokenFile != "" {
-		args = append(args, "--auth-token-file", authTokenFile)
-	} else if inheritedEnvToken {
-		log.Debug("host daemon will inherit auth token from environment")
-	}
 	logPath, _ := log.DefaultDaemonLogPath()
-	if logPath != "" {
-		args = append(args, "--log-file", logPath)
-	}
-	//nolint:gosec // executable is current binary and args are constructed without a shell.
-	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd := hostDaemonCommand(ctx, exe, controlPort, dataPort, noAuth, unsafeNoAuth, spawnTokenFile, logPath)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	if env != nil {
-		cmd.Env = env
-	}
 	if err := cmd.Start(); err != nil {
 		log.Error("failed to start host daemon process", "err", err)
 		return err
@@ -96,6 +71,24 @@ func Ensure(ctx context.Context, hostIP net.IP, controlPort, dataPort uint16, no
 		}
 	}
 	return fmt.Errorf("host daemon did not become ready within 5s")
+}
+
+func hostDaemonCommand(ctx context.Context, exe string, controlPort, dataPort uint16, noAuth, unsafeNoAuth bool, authTokenFile, logPath string) *exec.Cmd {
+	args := []string{"host-daemon", "--control-port", fmt.Sprint(controlPort), "--data-port", fmt.Sprint(dataPort)}
+	if noAuth {
+		args = append(args, "--no-auth")
+		if unsafeNoAuth {
+			args = append(args, "--unsafe-no-auth")
+		}
+	} else if authTokenFile != "" {
+		args = append(args, "--auth-token-file", authTokenFile)
+	}
+	if logPath != "" {
+		args = append(args, "--log-file", logPath)
+	}
+
+	cmd := exec.CommandContext(ctx, exe, args...) //nolint:gosec // executable is current binary and args are constructed without a shell.
+	return cmd
 }
 
 func Stop(hostIP net.IP, controlPort uint16, token string) error {

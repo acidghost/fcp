@@ -87,7 +87,6 @@ func TestDataHandshakeProof(t *testing.T) {
 func TestResolveClientTokenFallsBackToHostDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(EnvAuthToken, "")
 	t.Setenv(EnvAuthTokenFile, "")
 
 	path := filepath.Join(home, ".config", configDirName, tokenFileName)
@@ -95,7 +94,7 @@ func TestResolveClientTokenFallsBackToHostDefault(t *testing.T) {
 	if err := WriteTokenFile(path, token); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ResolveClientToken("", "")
+	got, err := ResolveClientToken("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,9 +105,8 @@ func TestResolveClientTokenFallsBackToHostDefault(t *testing.T) {
 
 func TestResolveClientTokenErrorsWhenNoSource(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv(EnvAuthToken, "")
 	t.Setenv(EnvAuthTokenFile, "")
-	if _, err := ResolveClientToken("", ""); !errors.Is(err, ErrNoTokenSource) {
+	if _, err := ResolveClientToken(""); !errors.Is(err, ErrNoTokenSource) {
 		t.Fatalf("ResolveClientToken() err = %v, want ErrNoTokenSource", err)
 	}
 }
@@ -135,5 +133,41 @@ func TestReadAndWriteTokenFileNormalizeAndRepairMode(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("token file mode = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestResolveTokenUsesFilesOnly(t *testing.T) {
+	tmp := t.TempDir()
+	cliPath := filepath.Join(tmp, "cli-token")
+	envPath := filepath.Join(tmp, "env-token")
+	defaultPath := filepath.Join(tmp, "default-token")
+	cliToken := strings.Repeat("a", TokenHexLength)
+	envToken := strings.Repeat("b", TokenHexLength)
+	defaultToken := strings.Repeat("c", TokenHexLength)
+	if err := WriteTokenFile(cliPath, cliToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTokenFile(envPath, envToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTokenFile(defaultPath, defaultToken); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvAuthTokenFile, envPath)
+
+	got, err := ResolveToken(cliPath, defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != cliToken {
+		t.Fatalf("ResolveToken with CLI file = %q, want %q", got, cliToken)
+	}
+
+	got, err = ResolveToken("", defaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != envToken {
+		t.Fatalf("ResolveToken with env file = %q, want %q", got, envToken)
 	}
 }

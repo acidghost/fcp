@@ -20,7 +20,6 @@ func newHostDaemonCmd() *cobra.Command {
 		dataPort           uint
 		exitOnIdle         bool
 		browserCmd         string
-		authToken          string
 		authTokenFile      string
 		noAuth             bool
 		unsafeNoAuth       bool
@@ -45,7 +44,7 @@ func newHostDaemonCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				resolvedToken, err = auth.ResolveToken(authToken, authTokenFile, defaultPath)
+				resolvedToken, err = auth.ResolveToken(authTokenFile, defaultPath)
 				if errors.Is(err, auth.ErrNoTokenSource) {
 					resolvedToken, err = auth.EnsureToken(defaultPath)
 				}
@@ -104,7 +103,6 @@ func newHostDaemonCmd() *cobra.Command {
 	cmd.Flags().UintVar(&dataPort, "data-port", uint(config.DefaultDataPort), "data port")
 	cmd.Flags().BoolVar(&exitOnIdle, "exit-on-idle", false, "exit when idle")
 	cmd.Flags().StringVar(&browserCmd, "browser-cmd", "", "browser command")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 	cmd.Flags().BoolVar(&unsafeNoAuth, "unsafe-no-auth", false, "allow --no-auth on non-loopback bind addresses")

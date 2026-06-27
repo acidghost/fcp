@@ -12,7 +12,6 @@ func newContainerDaemonCmd() *cobra.Command {
 		hostAddr      string
 		scanInterval  uint64
 		excludePorts  string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 		logFile       string
@@ -38,7 +37,7 @@ func newContainerDaemonCmd() *cobra.Command {
 				return err
 			}
 			cfg.ExcludePorts = ports
-			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			token, err := resolveCommandToken(noAuth, authTokenFile)
 			if err != nil {
 				return err
 			}
@@ -57,7 +56,6 @@ func newContainerDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&hostAddr, "host-addr", "", "host address")
 	cmd.Flags().Uint64Var(&scanInterval, "scan-interval", config.DefaultScanIntervalMillis, "scan interval ms")
 	cmd.Flags().StringVar(&excludePorts, "exclude-ports", "", "comma-separated exclude ports")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 	cmd.Flags().StringVar(&logFile, "log-file", "", "log file")
