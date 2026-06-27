@@ -20,7 +20,6 @@ func newForwardCmd() *cobra.Command {
 	var (
 		controlPort   uint
 		hostFlag      string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 	)
@@ -45,7 +44,7 @@ func newForwardCmd() *cobra.Command {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			token, err := resolveCommandToken(noAuth, authTokenFile)
 			if err != nil {
 				return err
 			}
@@ -79,7 +78,6 @@ func newForwardCmd() *cobra.Command {
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
@@ -90,7 +88,6 @@ func newUnforwardCmd() *cobra.Command {
 	var (
 		controlPort   uint
 		hostFlag      string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 	)
@@ -115,7 +112,7 @@ func newUnforwardCmd() *cobra.Command {
 				return fmt.Errorf("could not connect to host daemon at %s: %w", addr.String(), err)
 			}
 			defer conn.Close()
-			token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+			token, err := resolveCommandToken(noAuth, authTokenFile)
 			if err != nil {
 				return err
 			}
@@ -145,7 +142,6 @@ func newUnforwardCmd() *cobra.Command {
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 

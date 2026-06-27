@@ -49,7 +49,7 @@ func executeOpenShim(name string, args []string) int {
 	if err != nil {
 		log.Warn("failed to parse env config", "err", err)
 	}
-	if err := runOpen(args[0], cfg.ControlPort, false, "", ""); err != nil {
+	if err := runOpen(args[0], cfg.ControlPort, false, ""); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}

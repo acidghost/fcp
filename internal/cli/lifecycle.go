@@ -16,7 +16,6 @@ func newEnsureCmd() *cobra.Command {
 		controlPort   uint
 		dataPort      uint
 		hostFlag      string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 		unsafeNoAuth  bool
@@ -37,7 +36,7 @@ func newEnsureCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := host.Ensure(ctx, config.ResolveCLIHost(hostFlag), cp, dp, noAuth, unsafeNoAuth, authToken, authTokenFile); err != nil {
+			if err := host.Ensure(ctx, config.ResolveCLIHost(hostFlag), cp, dp, noAuth, unsafeNoAuth, authTokenFile); err != nil {
 				return err
 			}
 			return nil
@@ -47,7 +46,6 @@ func newEnsureCmd() *cobra.Command {
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().UintVar(&dataPort, "data-port", uint(config.DefaultDataPort), "data port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 	cmd.Flags().BoolVar(&unsafeNoAuth, "unsafe-no-auth", false, "allow --no-auth on non-loopback bind addresses")
@@ -59,7 +57,6 @@ func newStopCmd() *cobra.Command {
 	var (
 		controlPort   uint
 		hostFlag      string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 	)
@@ -69,13 +66,12 @@ func newStopCmd() *cobra.Command {
 		Short: "Stop host daemon",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			return execStop(hostFlag, controlPort, noAuth, authToken, authTokenFile)
+			return execStop(hostFlag, controlPort, noAuth, authTokenFile)
 		},
 	}
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
@@ -87,7 +83,6 @@ func newRestartCmd() *cobra.Command {
 		controlPort   uint
 		dataPort      uint
 		hostFlag      string
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 		unsafeNoAuth  bool
@@ -98,7 +93,7 @@ func newRestartCmd() *cobra.Command {
 		Short: "Stop then ensure host daemon",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			if err := execStop(hostFlag, controlPort, noAuth, authToken, authTokenFile); err != nil {
+			if err := execStop(hostFlag, controlPort, noAuth, authTokenFile); err != nil {
 				log.Warn("stop failed or daemon was not running; continuing with ensure")
 			}
 			time.Sleep(500 * time.Millisecond)
@@ -113,7 +108,7 @@ func newRestartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := host.Ensure(ctx, config.ResolveCLIHost(hostFlag), cp, dp, noAuth, unsafeNoAuth, authToken, authTokenFile); err != nil {
+			if err := host.Ensure(ctx, config.ResolveCLIHost(hostFlag), cp, dp, noAuth, unsafeNoAuth, authTokenFile); err != nil {
 				return err
 			}
 			return nil
@@ -123,7 +118,6 @@ func newRestartCmd() *cobra.Command {
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
 	cmd.Flags().UintVar(&dataPort, "data-port", uint(config.DefaultDataPort), "data port")
 	cmd.Flags().StringVar(&hostFlag, "host", "", "host")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 	cmd.Flags().BoolVar(&unsafeNoAuth, "unsafe-no-auth", false, "allow --no-auth on non-loopback bind addresses")
@@ -131,13 +125,13 @@ func newRestartCmd() *cobra.Command {
 	return cmd
 }
 
-func execStop(hostFlag string, controlPort uint, noAuth bool, authToken, authTokenFile string) error {
+func execStop(hostFlag string, controlPort uint, noAuth bool, authTokenFile string) error {
 	log.Info("stop command invoked", "controlPort", controlPort)
 	cp, err := flagPort(controlPort)
 	if err != nil {
 		return err
 	}
-	token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+	token, err := resolveCommandToken(noAuth, authTokenFile)
 	if err != nil {
 		return err
 	}

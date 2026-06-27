@@ -54,9 +54,9 @@ func splitComma(value string) []string {
 	return out
 }
 
-func resolveCommandToken(noAuth bool, authToken, authTokenFile string) (string, error) {
+func resolveCommandToken(noAuth bool, authTokenFile string) (string, error) {
 	if noAuth {
 		return "", nil
 	}
-	return auth.ResolveClientToken(authToken, authTokenFile)
+	return auth.ResolveClientToken(authTokenFile)
 }

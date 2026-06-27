@@ -16,7 +16,6 @@ import (
 func newOpenCmd() *cobra.Command {
 	var (
 		controlPort   uint
-		authToken     string
 		authTokenFile string
 		noAuth        bool
 	)
@@ -31,25 +30,24 @@ func newOpenCmd() *cobra.Command {
 				return err
 			}
 			log.Info("open command invoked", "url", args[0], "controlPort", cp)
-			return runOpen(args[0], cp, noAuth, authToken, authTokenFile)
+			return runOpen(args[0], cp, noAuth, authTokenFile)
 		},
 	}
 
 	cmd.Flags().UintVar(&controlPort, "control-port", uint(config.DefaultControlPort), "control port")
-	cmd.Flags().StringVar(&authToken, "auth-token", "", "auth token")
 	cmd.Flags().StringVar(&authTokenFile, "auth-token-file", "", "auth token file")
 	cmd.Flags().BoolVar(&noAuth, "no-auth", false, "disable auth")
 
 	return cmd
 }
 
-func runOpen(rawURL string, controlPort uint16, noAuth bool, authToken, authTokenFile string) error {
+func runOpen(rawURL string, controlPort uint16, noAuth bool, authTokenFile string) error {
 	log.Debug("runOpen", "url", rawURL, "controlPort", controlPort)
 	if err := protocol.ValidateOpenURL(rawURL); err != nil {
 		log.Warn("invalid open URL", "url", rawURL, "err", err)
 		return err
 	}
-	token, err := resolveCommandToken(noAuth, authToken, authTokenFile)
+	token, err := resolveCommandToken(noAuth, authTokenFile)
 	if err != nil {
 		return err
 	}
