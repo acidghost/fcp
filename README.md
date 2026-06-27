@@ -159,24 +159,34 @@ Enable socket forwarding on the host daemon:
 
 ```bash
 fcp host-daemon \
-  --socket-watch-paths "/var/run/docker.sock,/run/**/*.sock" \
-  --socket-container-path-prefix /run/fcp
+  --socket-forward /tmp/postgres/.s.PGSQL.5432:/run/fcp/postgres.sock
 ```
 
-The host scans the configured globs every 2 seconds. For each matching Unix socket, it asks the container daemon to create a mirror socket at:
+Prefer exact `--socket-forward host_path:container_path` rules. Forwarding Docker, containerd, Podman, BuildKit, Colima, Lima, Docker Desktop, or other runtime/admin sockets can grant container processes powerful host capabilities, including host filesystem access through the runtime. Those sockets require an explicit acknowledgment:
 
-```text
-<socket-container-path-prefix>/<basename-of-host-socket>
+```bash
+fcp host-daemon \
+  --socket-forward /var/run/docker.sock:/run/fcp/docker.sock \
+  --allow-sensitive-sockets
 ```
 
-Examples:
+Legacy glob scanning remains available for advanced use. The host scans configured globs every 2 seconds and asks the container daemon to create mirror sockets under `--socket-container-path-prefix`. Derived mirror names include a stable short hash so sockets with the same basename do not collide:
 
 | Host socket | Container prefix | Container mirror |
 |---|---|---|
-| `/var/run/docker.sock` | `/run/fcp` | `/run/fcp/docker.sock` |
-| `/tmp/postgres/.s.PGSQL.5432` | `/run/fcp` | `/run/fcp/.s.PGSQL.5432` |
+| `/tmp/a/api.sock` | `/run/fcp` | `/run/fcp/api.sock-<hash>` |
+| `/tmp/b/api.sock` | `/run/fcp` | `/run/fcp/api.sock-<different-hash>` |
 
-Socket forwarding supports `*` and recursive `**` glob patterns and currently tracks up to 16 sockets. Use `--socket-scan-interval-ms` to change the scan interval, or `--no-socket-forwarding` to disable it explicitly.
+Recursive `**` globs require explicit acknowledgment:
+
+```bash
+fcp host-daemon \
+  --socket-watch-paths "/run/**/*.sock" \
+  --socket-container-path-prefix /run/fcp \
+  --allow-recursive-socket-globs
+```
+
+Socket forwarding currently tracks up to 16 sockets. Use `--socket-scan-interval-ms` to change the scan interval, `--socket-scan-budget-ms` to bound recursive traversal time, or `--no-socket-forwarding` to disable it explicitly. Mirror socket permissions are `0600`; this does not sandbox other same-UID processes inside the container.
 
 ## Configuration
 

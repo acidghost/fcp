@@ -21,6 +21,7 @@ type MirrorSocket struct {
 	ContainerPath string
 	Listener      net.Listener
 	Stop          chan struct{}
+	CreatedDirs   []string
 }
 
 type RelayMessage struct {
@@ -36,7 +37,12 @@ func CreateMirrorSocket(socketID, containerPath string) (*MirrorSocket, error) {
 	if len(containerPath) > maxUnixSocketPath {
 		return nil, fmt.Errorf("container socket path too long: %d > %d", len(containerPath), maxUnixSocketPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(containerPath), 0o700); err != nil {
+	dir := filepath.Dir(containerPath)
+	createdDirs, err := missingDirs(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	_ = os.Remove(containerPath)
@@ -48,7 +54,7 @@ func CreateMirrorSocket(socketID, containerPath string) (*MirrorSocket, error) {
 		_ = ln.Close()
 		return nil, err
 	}
-	return &MirrorSocket{SocketID: socketID, ContainerPath: containerPath, Listener: ln, Stop: make(chan struct{})}, nil
+	return &MirrorSocket{SocketID: socketID, ContainerPath: containerPath, Listener: ln, Stop: make(chan struct{}), CreatedDirs: createdDirs}, nil
 }
 
 func RemoveMirrorSocket(m *MirrorSocket) {
@@ -58,7 +64,26 @@ func RemoveMirrorSocket(m *MirrorSocket) {
 	log.Debug("removing mirror socket", "socketID", m.SocketID, "path", m.ContainerPath)
 	_ = m.Listener.Close()
 	_ = os.Remove(m.ContainerPath)
-	_ = os.Remove(filepath.Dir(m.ContainerPath))
+	for i := len(m.CreatedDirs) - 1; i >= 0; i-- {
+		_ = os.Remove(m.CreatedDirs[i])
+	}
+}
+
+func missingDirs(dir string) ([]string, error) {
+	dir = filepath.Clean(dir)
+	if dir == "." || dir == string(filepath.Separator) {
+		return nil, nil
+	}
+	if _, err := os.Stat(dir); err == nil {
+		return nil, nil
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	parentDirs, err := missingDirs(filepath.Dir(dir))
+	if err != nil {
+		return nil, err
+	}
+	return append(parentDirs, dir), nil
 }
 
 func RunMirrorAcceptLoop(m *MirrorSocket, relay chan<- RelayMessage, dataAddr net.Addr, authToken string) {

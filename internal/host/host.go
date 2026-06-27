@@ -61,6 +61,7 @@ type Daemon struct {
 	containers    map[string]*containerState
 	usedHostPorts map[uint16]string
 	pending       map[string]chan dataStream
+	earlyData     map[string]dataStream
 	sockets       map[string]SocketInfo
 }
 
@@ -123,6 +124,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.NoAuth && !cfg.UnsafeNoAuth && !isLoopbackBind(bindAddr) {
 		return fmt.Errorf("refusing --no-auth with non-loopback bind address %s; pass --unsafe-no-auth to acknowledge the risk", bindAddr)
 	}
+	if err := ValidateSocketForwardingConfig(cfg.SocketForwarding); err != nil {
+		return err
+	}
 	log.Info("host daemon starting", "controlPort", cfg.ControlPort, "dataPort", cfg.DataPort, "bindAddr", bindAddr, "exitOnIdle", cfg.ExitOnIdle, "noAuth", cfg.NoAuth, "socketForwarding", cfg.SocketForwarding.Enabled)
 	controlLn, err := net.ListenTCP("tcp", &net.TCPAddr{IP: bindAddr, Port: int(cfg.ControlPort)})
 	if err != nil {
@@ -152,13 +156,14 @@ func Run(ctx context.Context, cfg Config) error {
 		containers:    map[string]*containerState{},
 		usedHostPorts: map[uint16]string{},
 		pending:       map[string]chan dataStream{},
+		earlyData:     map[string]dataStream{},
 		sockets:       map[string]SocketInfo{},
 	}
 
 	go d.acceptControl(controlLn)
 	go d.acceptData(dataLn)
-	if cfg.SocketForwarding.Enabled && len(cfg.SocketForwarding.WatchPaths) > 0 {
-		log.Info("socket forwarding enabled", "watchPaths", cfg.SocketForwarding.WatchPaths, "scanInterval", cfg.SocketForwarding.ScanIntervalMillis)
+	if cfg.SocketForwarding.Enabled && (len(cfg.SocketForwarding.WatchPaths) > 0 || len(cfg.SocketForwarding.Rules) > 0) {
+		log.Info("socket forwarding enabled", "rules", len(cfg.SocketForwarding.Rules), "watchPaths", cfg.SocketForwarding.WatchPaths, "scanInterval", cfg.SocketForwarding.ScanIntervalMillis)
 		go d.runSocketScanner(ctx)
 	}
 
@@ -576,7 +581,13 @@ func (d *Daemon) handleDataConnection(conn net.Conn) {
 func (d *Daemon) registerPending(connID string) (<-chan dataStream, bool) {
 	d.pendingMu.Lock()
 	defer d.pendingMu.Unlock()
-	if len(d.pending) >= maxPendingConnections {
+	if ds, ok := d.earlyData[connID]; ok {
+		delete(d.earlyData, connID)
+		ch := make(chan dataStream, 1)
+		ch <- ds
+		return ch, true
+	}
+	if len(d.pending)+len(d.earlyData) >= maxPendingConnections {
 		return nil, false
 	}
 	ch := make(chan dataStream, 1)
@@ -587,13 +598,25 @@ func (d *Daemon) registerPending(connID string) (<-chan dataStream, bool) {
 func (d *Daemon) resolvePending(connID string, ds dataStream) bool {
 	d.pendingMu.Lock()
 	ch := d.pending[connID]
-	delete(d.pending, connID)
-	d.pendingMu.Unlock()
-	if ch == nil {
+	if ch != nil {
+		delete(d.pending, connID)
+		d.pendingMu.Unlock()
+		ch <- ds
+		return true
+	}
+	if len(d.pending)+len(d.earlyData) >= maxPendingConnections {
+		d.pendingMu.Unlock()
 		_ = ds.conn.Close()
 		return false
 	}
-	ch <- ds
+	if _, exists := d.earlyData[connID]; exists {
+		d.pendingMu.Unlock()
+		_ = ds.conn.Close()
+		return false
+	}
+	d.earlyData[connID] = ds
+	d.pendingMu.Unlock()
+	go d.expireEarlyData(connID, connectTimeout)
 	return true
 }
 
@@ -601,9 +624,29 @@ func (d *Daemon) cancelPending(connID string) {
 	d.pendingMu.Lock()
 	ch := d.pending[connID]
 	delete(d.pending, connID)
+	ds, hasEarlyData := d.earlyData[connID]
+	delete(d.earlyData, connID)
 	d.pendingMu.Unlock()
 	if ch != nil {
 		close(ch)
+	}
+	if hasEarlyData {
+		_ = ds.conn.Close()
+	}
+}
+
+func (d *Daemon) expireEarlyData(connID string, ttl time.Duration) {
+	timer := time.NewTimer(ttl)
+	defer timer.Stop()
+	<-timer.C
+	d.pendingMu.Lock()
+	ds, ok := d.earlyData[connID]
+	if ok {
+		delete(d.earlyData, connID)
+	}
+	d.pendingMu.Unlock()
+	if ok {
+		_ = ds.conn.Close()
 	}
 }
 
@@ -712,7 +755,7 @@ func (d *Daemon) runSocketScanner(ctx context.Context) {
 	if interval <= 0 {
 		interval = time.Duration(config.DefaultSocketScanMillis) * time.Millisecond
 	}
-	scanner := NewSocketScanner(sf.WatchPaths, sf.ContainerPathPrefix, sf.MaxSocketForwards)
+	scanner := NewSocketScannerFromConfig(sf)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
