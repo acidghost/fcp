@@ -10,6 +10,7 @@ ldflags := '-s -w -X main.buildVersion='+version \
 
 goos := if os() == 'macos' { 'darwin' } else { os() }
 goarch := if arch() == 'aarch64' { 'arm64' } else if arch() == 'x86_64' { 'amd64' } else { arch() }
+install_prefix := `go env GOBIN`
 
 alias b := build
 alias r := run
@@ -47,7 +48,7 @@ lint:
     golangci-lint run
 
 install: build
-    cp -v './build/{{program}}-{{goos}}-{{goarch}}' "$(go env GOBIN)/{{program}}"
+    cp -v './build/{{program}}-{{goos}}-{{goarch}}' "{{install_prefix}}/{{program}}"
 
 clean:
     rm -rf build
